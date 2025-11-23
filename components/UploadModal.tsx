@@ -341,8 +341,10 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
               setUploadStatus('上传成功');
             } catch (err) {
               console.error(err);
-              setUploadStatus('上传失败，将使用本地存储');
-              // Fallback to base64 is automatic if we don't change finalUrl
+              setUploadStatus('上传失败');
+              alert(`上传失败: ${err instanceof Error ? err.message : 'Unknown error'}`);
+              setLoading(false);
+              return; // Stop saving if upload failed
             }
         }
     }
