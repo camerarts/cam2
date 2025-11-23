@@ -82,6 +82,11 @@ export const MapView: React.FC<MapViewProps> = ({ photos, theme, onPhotoClick, o
 
     const map = mapInstance.current;
 
+    // CRITICAL FIX: Force map to recalculate size after a short delay to prevent partial rendering
+    setTimeout(() => {
+      map.invalidateSize();
+    }, 100);
+
     // Update Tile Layer based on theme
     const layerStyle = theme === 'dark' ? 'dark_all' : 'light_all';
     map.eachLayer((layer: any) => {
