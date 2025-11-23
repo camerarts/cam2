@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Menu, Plus, LogOut, Filter, Settings, Moon, Sun, Trash2, Pencil, Check, SlidersHorizontal, Globe } from 'lucide-react';
 import { GlassCard } from './components/GlassCard';
@@ -136,15 +135,34 @@ const App: React.FC = () => {
     }
   });
 
-  // Save to local storage whenever photos change - WITH SAFETY CHECK
+  // Save to local storage whenever photos change - WITH AUTO CLEANUP FOR QUOTA
   useEffect(() => {
     try {
       localStorage.setItem('lumina_photos', JSON.stringify(photos));
     } catch (e: any) {
       // Catch QuotaExceededError
       if (e.name === 'QuotaExceededError' || e.code === 22) {
-        alert("本地存储空间已满，新照片可能无法保存。请确保已连接云存储（R2）。");
-        console.error("LocalStorage Quota Exceeded. Failed to save photos.");
+        console.warn("LocalStorage Quota Exceeded. Attempting to clean up old Base64 images...");
+        
+        // AUTO CLEANUP STRATEGY:
+        // Filter out photos that have huge Base64 strings (starts with data:image)
+        // Keep only photos that use HTTP links (R2, Unsplash, Picsum)
+        // This sacrifices old test data to save new production data.
+        const cleanPhotos = photos.filter(p => !p.url.startsWith('data:image'));
+        
+        try {
+            if (cleanPhotos.length < photos.length) {
+                // We found stuff to delete
+                localStorage.setItem('lumina_photos', JSON.stringify(cleanPhotos));
+                alert("本地存储空间已满。系统已自动清理旧的测试图片（Base64），以保存新上传的云端图片。页面将刷新。");
+                window.location.reload(); 
+            } else {
+                alert("本地存储严重不足，且无法自动清理。请手动清除浏览器缓存。");
+            }
+        } catch (retryErr) {
+             console.error("Failed to save even after cleanup", retryErr);
+             alert("保存失败：浏览器存储空间已满。");
+        }
       } else {
         console.error("Failed to save photos to storage", e);
       }
