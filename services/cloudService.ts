@@ -68,7 +68,10 @@ export const uploadImageToCloud = async (base64Data: string): Promise<string> =>
     body: blob
   });
 
-  if (!response.ok) throw new Error('Upload failed');
+  if (!response.ok) {
+     const errorText = await response.text().catch(() => response.statusText);
+     throw new Error(`Upload failed: ${response.status} ${errorText}`);
+  }
   
   const data = await response.json();
   return data.url;
