@@ -3,14 +3,17 @@
 // 配置区域 / Configuration
 // ==========================================
 // 1. 请填入您的 Cloudflare Worker 地址 (例如 "https://lumina-upload.yourname.workers.dev")
-//    Leave empty to use LocalStorage mode (fallback).
-export const CLOUD_API_URL = "luminaphotos.10125800.xyz"; 
+//    注意：请确保 Worker 代码已更新以支持 auth-setup 接口
+export const CLOUD_API_URL: string = "luminaphotos.10125800.xyz"; 
 
 // 2. 密钥 (需与 Worker 代码一致)
 export const CLOUD_API_KEY = "lumina_upload_key_123"; 
 // ==========================================
 
-export const isCloudConfigured = () => !!CLOUD_API_URL;
+export const isCloudConfigured = () => !!CLOUD_API_URL && CLOUD_API_URL.length > 0;
+
+// Helper to ensure URL doesn't end with slash
+const getApiUrl = () => CLOUD_API_URL.replace(/\/$/, "");
 
 /**
  * Check if the admin password has already been set in the cloud
@@ -18,7 +21,7 @@ export const isCloudConfigured = () => !!CLOUD_API_URL;
 export const checkAuthSetup = async (): Promise<boolean> => {
   if (!isCloudConfigured()) return false;
   try {
-    const res = await fetch(`${CLOUD_API_URL}?action=auth-check`);
+    const res = await fetch(`${getApiUrl()}?action=auth-check`);
     const data = await res.json();
     return data.isSetup;
   } catch (e) {
@@ -33,11 +36,12 @@ export const checkAuthSetup = async (): Promise<boolean> => {
 export const setupPassword = async (password: string): Promise<boolean> => {
   if (!isCloudConfigured()) return false;
   try {
-    const res = await fetch(`${CLOUD_API_URL}?action=auth-setup`, {
+    const res = await fetch(`${getApiUrl()}?action=auth-setup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password })
     });
+    if (!res.ok) throw new Error(`Server Error: ${res.status}`);
     const data = await res.json();
     return data.success;
   } catch (e) {
@@ -52,11 +56,12 @@ export const setupPassword = async (password: string): Promise<boolean> => {
 export const verifyPassword = async (password: string): Promise<boolean> => {
   if (!isCloudConfigured()) return false;
   try {
-    const res = await fetch(`${CLOUD_API_URL}?action=auth-verify`, {
+    const res = await fetch(`${getApiUrl()}?action=auth-verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password })
     });
+    if (!res.ok) throw new Error(`Server Error: ${res.status}`);
     const data = await res.json();
     return data.success;
   } catch (e) {
@@ -86,7 +91,7 @@ export const uploadImageToCloud = async (base64Data: string): Promise<string> =>
 
   const blob = base64ToBlob(base64Data);
   
-  const response = await fetch(CLOUD_API_URL, {
+  const response = await fetch(getApiUrl(), {
     method: 'PUT',
     headers: {
       'X-Secret-Key': CLOUD_API_KEY,
