@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Upload, Loader2, ChevronDown, Trash2, Star, Calendar as CalendarIcon } from 'lucide-react';
+import { X, Upload, Loader2, ChevronDown, Trash2, Star, Calendar as CalendarIcon, MapPin } from 'lucide-react';
 import { Category, Photo, Theme } from '../types';
 import { GlassCard } from './GlassCard';
 import EXIF from 'exif-js';
@@ -130,7 +130,10 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
   const [location, setLocation] = useState('');
   const [date, setDate] = useState('');
   const [focalLength, setFocalLength] = useState('');
-  const [gpsCoords, setGpsCoords] = useState<{lat: number, lng: number} | undefined>(undefined);
+  
+  // GPS State (Strings for input)
+  const [latitude, setLatitude] = useState('');
+  const [longitude, setLongitude] = useState('');
 
   const isDark = theme === 'dark';
   const textPrimary = isDark ? "text-white" : "text-black";
@@ -153,11 +156,13 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
       setLocation(editingPhoto.exif.location);
       setDate(editingPhoto.exif.date);
       setFocalLength(editingPhoto.exif.focalLength || '');
-      setGpsCoords(editingPhoto.exif.latitude && editingPhoto.exif.longitude ? { lat: editingPhoto.exif.latitude, lng: editingPhoto.exif.longitude } : undefined);
+      setLatitude(editingPhoto.exif.latitude ? String(editingPhoto.exif.latitude) : '');
+      setLongitude(editingPhoto.exif.longitude ? String(editingPhoto.exif.longitude) : '');
     } else if (isOpen && !editingPhoto) {
       // Reset for new upload
       setImageUrl(''); setImageDims({width:0,height:0}); setTitle(''); setRating(5);
-      setCamera(''); setLens(''); setAperture(''); setShutter(''); setIso(''); setLocation(''); setFocalLength(''); setGpsCoords(undefined);
+      setCamera(''); setLens(''); setAperture(''); setShutter(''); setIso(''); setLocation(''); setFocalLength(''); 
+      setLatitude(''); setLongitude('');
       
       // Default date to today
       const today = new Date();
@@ -317,7 +322,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
                    const decLon = convertDMSToDD(safeLon, lonRef);
                    
                    if (!isNaN(decLat) && !isNaN(decLon)) {
-                     setGpsCoords({ lat: decLat, lng: decLon });
+                     setLatitude(String(decLat));
+                     setLongitude(String(decLon));
                    }
                 }
 
@@ -351,6 +357,11 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
     e.preventDefault();
     if (!imageUrl) return;
 
+    // Parse GPS
+    const latNum = parseFloat(latitude);
+    const lngNum = parseFloat(longitude);
+    const hasGPS = !isNaN(latNum) && !isNaN(lngNum);
+
     const photoData: Photo = {
       id: editingPhoto ? editingPhoto.id : Date.now().toString(),
       url: imageUrl,
@@ -361,7 +372,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
       rating: rating,
       exif: { 
         camera, lens, aperture, shutterSpeed: shutter, iso, location, date, focalLength,
-        latitude: gpsCoords?.lat, longitude: gpsCoords?.lng 
+        latitude: hasGPS ? latNum : undefined, 
+        longitude: hasGPS ? lngNum : undefined 
       }
     };
 
@@ -462,6 +474,17 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
                     <SmartInput label="地点" value={location} onChange={setLocation} storageKey="location" placeholder="东京, 日本" theme={theme} />
                  </div>
               </div>
+              
+              {/* GPS Coordinates Section */}
+              <div className="grid grid-cols-2 gap-4 mt-4 bg-black/5 p-3 rounded-lg dark:bg-white/5">
+                 <div className="flex items-center gap-2 text-xs opacity-50 mb-2 col-span-2">
+                    <MapPin size={12} />
+                    <span>地理坐标 (用于地图展示)</span>
+                 </div>
+                 <SmartInput label="纬度 (Lat)" value={latitude} onChange={setLatitude} storageKey="gps_lat" placeholder="35.6895" theme={theme} />
+                 <SmartInput label="经度 (Lng)" value={longitude} onChange={setLongitude} storageKey="gps_lng" placeholder="139.6917" theme={theme} />
+              </div>
+
               <div className="mt-4">
                  <SmartInput label="拍摄日期" value={date} onChange={setDate} storageKey="date" placeholder="请选择日期" theme={theme} type="date" />
               </div>
