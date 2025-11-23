@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Menu, Plus, LogOut, Filter, Settings, Moon, Sun, Trash2, Pencil, Check, SlidersHorizontal, Globe } from 'lucide-react';
 import { GlassCard } from './components/GlassCard';
@@ -5,6 +6,7 @@ import { PhotoModal } from './components/PhotoModal';
 import { UploadModal } from './components/UploadModal';
 import { LoginModal } from './components/LoginModal';
 import { MapView } from './components/MapView';
+import { ProgressBar } from './components/ProgressBar';
 import { Category, Photo, Theme } from './types';
 
 // Helper: Calculate distance between two coordinates in km (Haversine formula)
@@ -121,7 +123,26 @@ const PAGE_SIZE = 9;
 const FEED_TABS = ['精选', '最新', '随览', '附近', '远方'];
 
 const App: React.FC = () => {
-  const [photos, setPhotos] = useState<Photo[]>(INITIAL_PHOTOS);
+  // Persistence Logic: Load from local storage or use initial data
+  const [photos, setPhotos] = useState<Photo[]>(() => {
+    try {
+      const saved = localStorage.getItem('lumina_photos');
+      return saved ? JSON.parse(saved) : INITIAL_PHOTOS;
+    } catch (e) {
+      console.error("Failed to load photos from storage", e);
+      return INITIAL_PHOTOS;
+    }
+  });
+
+  // Save to local storage whenever photos change
+  useEffect(() => {
+    try {
+      localStorage.setItem('lumina_photos', JSON.stringify(photos));
+    } catch (e) {
+      console.error("Failed to save photos to storage", e);
+    }
+  }, [photos]);
+
   const [activeCategory, setActiveCategory] = useState<Category>(Category.ALL);
   const [activeTab, setActiveTab] = useState<string>('最新');
   const [viewMode, setViewMode] = useState<'grid' | 'map'>('grid');
@@ -139,7 +160,8 @@ const App: React.FC = () => {
   const [scrolled, setScrolled] = useState(false);
   const [theme, setTheme] = useState<Theme>('light');
   
-  // Progressive Loading State
+  // Loading States
+  const [globalLoading, setGlobalLoading] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
@@ -178,6 +200,10 @@ const App: React.FC = () => {
   const handleTabClick = (tab: string) => {
     // Reset view mode to grid when clicking other tabs, unless user toggles map explicitly
     if (viewMode === 'map') setViewMode('grid');
+
+    // Trigger loading effect
+    setGlobalLoading(true);
+    setTimeout(() => setGlobalLoading(false), 800);
 
     if (tab === '随览') {
       // Always trigger re-shuffle even if already active
@@ -296,6 +322,9 @@ const App: React.FC = () => {
   const visiblePhotos = filteredPhotos.slice(0, visibleCount);
 
   const handleUpdatePhoto = (updatedPhoto: Photo) => {
+    // Trigger loading
+    setGlobalLoading(true);
+
     setPhotos(prevPhotos => {
       const exists = prevPhotos.some(p => p.id === updatedPhoto.id);
       if (exists) {
@@ -313,9 +342,12 @@ const App: React.FC = () => {
         return [updatedPhoto, ...prevPhotos]; // Prepend new photo
       }
     });
+    
     if (selectedPhoto?.id === updatedPhoto.id) {
       setSelectedPhoto(updatedPhoto);
     }
+
+    setTimeout(() => setGlobalLoading(false), 500);
   };
 
   const handleDeletePhoto = (e: React.MouseEvent, photoId: string) => {
@@ -372,6 +404,7 @@ const App: React.FC = () => {
   return (
     <div className={`min-h-screen font-sans selection:bg-gray-500/30 ${textPrimary}`}>
       <Background />
+      <ProgressBar isLoading={globalLoading} theme={theme} />
 
       {/* Hero Section - Redesigned for Minimalist Premium Look */}
       {viewMode !== 'map' && (
@@ -529,7 +562,12 @@ const App: React.FC = () => {
         {viewMode === 'map' ? (
            // MAP VIEW
            <div className="w-full h-full">
-             <MapView photos={filteredPhotos} theme={theme} onPhotoClick={handlePhotoClick} />
+             <MapView 
+               photos={filteredPhotos} 
+               theme={theme} 
+               onPhotoClick={handlePhotoClick} 
+               onMapLoadStatus={(isLoading) => setGlobalLoading(isLoading)}
+             />
            </div>
         ) : (
           // GRID VIEW
