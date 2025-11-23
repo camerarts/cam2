@@ -301,10 +301,15 @@ const App: React.FC = () => {
       if (exists) {
         return prevPhotos.map(p => p.id === updatedPhoto.id ? updatedPhoto : p);
       } else {
-        // New photo: Reset filters to ensure it's visible
+        // New photo uploaded!
+        // 1. Force switch to Grid View
+        setViewMode('grid');
+        // 2. Reset filters to default to ensure visibility
         setActiveCategory(Category.ALL);
         setActiveTab('最新');
-        window.scrollTo(0, 0);
+        // 3. Force scroll to top
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        
         return [updatedPhoto, ...prevPhotos]; // Prepend new photo
       }
     });
