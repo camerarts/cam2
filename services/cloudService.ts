@@ -4,7 +4,7 @@
 // ==========================================
 // 1. 请填入您的 Cloudflare Worker 地址 (例如 "https://lumina-upload.yourname.workers.dev")
 //    Leave empty to use LocalStorage mode (fallback).
-export const CLOUD_API_URL = ""; 
+export const CLOUD_API_URL = "luminaphotos.10125800.xyz"; 
 
 // 2. 密钥 (需与 Worker 代码一致)
 export const CLOUD_API_KEY = "lumina_upload_key_123"; 
