@@ -1,16 +1,10 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Upload, Loader2, ChevronDown, Trash2, Star, Calendar as CalendarIcon, MapPin, CheckCircle, Cloud } from 'lucide-react';
 import { Category, Photo, Theme } from '../types';
 import { GlassCard } from './GlassCard';
 import EXIF from 'exif-js';
-
-// --- 配置区域 / Configuration Area ---
-// 教程：
-// 1. 如果留空，系统将继续使用 Base64 (LocalStorage) 存储，适合演示。
-// 2. 如果填入 Cloudflare Worker 地址，系统将自动把图片上传到 R2 对象存储，并保存返回的 URL。
-const CLOUD_UPLOAD_URL = "luminaphotos.sqqdeidt.workers.dev"; // 例如: "https://lumina-upload.yourname.workers.dev"
-const CLOUD_UPLOAD_KEY = "lumina_upload_key_123"; // 简单的鉴权密钥，需与 Worker 代码一致
-// ------------------------------------
+import { uploadImageToCloud, isCloudConfigured } from '../services/cloudService';
 
 interface SmartInputProps {
   label: string;
@@ -129,7 +123,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
   
   // Image Data
   const [imageUrl, setImageUrl] = useState<string>(''); // This holds Base64 for preview
-  const [finalCloudUrl, setFinalCloudUrl] = useState<string>(''); // This holds the R2 URL if uploaded
   const [imageDims, setImageDims] = useState<{width: number, height: number}>({ width: 0, height: 0 });
   
   const [title, setTitle] = useState('');
@@ -162,7 +155,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
   useEffect(() => {
     if (isOpen && editingPhoto) {
       setImageUrl(editingPhoto.url);
-      setFinalCloudUrl(editingPhoto.url); // Existing URL is likely cloud or base64
       setTitle(editingPhoto.title);
       setCategory(editingPhoto.category);
       setRating(editingPhoto.rating || 0);
@@ -180,7 +172,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
       setLongitude(editingPhoto.exif.longitude ? String(editingPhoto.exif.longitude) : '');
     } else if (isOpen && !editingPhoto) {
       // Reset
-      setImageUrl(''); setFinalCloudUrl(''); setImageDims({width:0,height:0}); setTitle(''); setRating(5);
+      setImageUrl(''); setImageDims({width:0,height:0}); setTitle(''); setRating(5);
       setCamera(''); setLens(''); setAperture(''); setShutter(''); setIso(''); setLocation(''); setFocalLength(''); 
       setLatitude(''); setLongitude('');
       setUploadStatus('');
@@ -193,7 +185,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
     }
   }, [isOpen, editingPhoto]);
 
-  // Map Initialization (omitted repetitive code, same as previous)
+  // Map Initialization
   useEffect(() => {
     if (!isOpen) {
       if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; }
@@ -229,48 +221,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
       });
     }
   }, [isOpen, theme, latitude, longitude]);
-
-  // Helper: Base64 to Blob
-  const base64ToBlob = (base64: string): Blob => {
-    const arr = base64.split(',');
-    const mime = arr[0].match(/:(.*?);/)![1];
-    const bstr = atob(arr[1]);
-    let n = bstr.length;
-    const u8arr = new Uint8Array(n);
-    while (n--) {
-        u8arr[n] = bstr.charCodeAt(n);
-    }
-    return new Blob([u8arr], { type: mime });
-  };
-
-  // Helper: Upload to R2 Worker
-  const uploadToCloud = async (base64Data: string): Promise<string> => {
-     if (!CLOUD_UPLOAD_URL) return base64Data; // Fallback to base64 if no server configured
-
-     try {
-       setUploadStatus('正在上传到云端...');
-       const blob = base64ToBlob(base64Data);
-       
-       const response = await fetch(CLOUD_UPLOAD_URL, {
-         method: 'PUT',
-         headers: {
-           'X-Secret-Key': CLOUD_UPLOAD_KEY,
-           'Content-Type': blob.type
-         },
-         body: blob
-       });
-
-       if (!response.ok) throw new Error('Upload failed');
-       
-       const data = await response.json();
-       setUploadStatus('云端上传成功!');
-       return data.url; // The public R2 URL
-     } catch (err) {
-       console.error("Cloud upload failed", err);
-       setUploadStatus('上传失败，使用本地存储');
-       return base64Data; // Fallback
-     }
-  };
 
   // Helper: Compress Image
   const compressImage = (file: File): Promise<string> => {
@@ -323,13 +273,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
       setLoading(true);
       setUploadStatus('处理图片中...');
       
-      // EXIF Logic (Keep existing)
+      // EXIF Logic
       try {
         await new Promise<void>((resolve) => {
             EXIF.getData(file as any, function(this: any) {
                 if (!this || !this.exifdata) { resolve(); return; }
                 const getTag = (tag: string) => EXIF.getTag(this, tag);
-                // ... (Existing EXIF extraction code) ...
                 const make = getTag('Make');
                 const model = getTag('Model');
                 if (model) {
@@ -360,11 +309,10 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
 
       try {
          const compressedBase64 = await compressImage(file);
-         
          const img = new Image();
          img.onload = () => {
              setImageDims({ width: img.naturalWidth, height: img.naturalHeight });
-             setImageUrl(compressedBase64); // Show preview immediately
+             setImageUrl(compressedBase64); // Show preview
              setLoading(false);
              setUploadStatus('');
          };
@@ -382,13 +330,20 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
 
     setLoading(true);
 
-    // If we have a Cloud URL configured, upload now
+    // Cloud Upload Logic
     let finalUrl = imageUrl;
-    if (CLOUD_UPLOAD_URL && !editingPhoto) {
-        // Only upload if it's new. If editing, we assume URL is already valid unless changed?
-        // Simpler logic: if imageUrl starts with data:image, it needs upload
+    if (isCloudConfigured() && !editingPhoto) {
+        // Check if it needs upload (if it's base64)
         if (imageUrl.startsWith('data:image')) {
-            finalUrl = await uploadToCloud(imageUrl);
+            try {
+              setUploadStatus('正在上传到云端...');
+              finalUrl = await uploadImageToCloud(imageUrl);
+              setUploadStatus('上传成功');
+            } catch (err) {
+              console.error(err);
+              setUploadStatus('上传失败，将使用本地存储');
+              // Fallback to base64 is automatic if we don't change finalUrl
+            }
         }
     }
 
@@ -442,7 +397,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
               )}
               {uploadStatus && (
                   <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/70 text-white text-xs px-2 py-1 rounded-full backdrop-blur-md flex items-center gap-1">
-                      {uploadStatus === '云端上传成功!' ? <Cloud size={10} className="text-green-400"/> : <Loader2 size={10} className="animate-spin"/>}
+                      {uploadStatus.includes('成功') ? <Cloud size={10} className="text-green-400"/> : <Loader2 size={10} className="animate-spin"/>}
                       {uploadStatus}
                   </div>
               )}
