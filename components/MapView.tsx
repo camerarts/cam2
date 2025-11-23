@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Photo, Theme } from '../types';
