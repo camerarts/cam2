@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Upload, Loader2, ChevronDown, Trash2, Star, Calendar as CalendarIcon, MapPin } from 'lucide-react';
+import { X, Upload, Loader2, ChevronDown, Trash2, Star, Calendar as CalendarIcon, MapPin, CheckCircle } from 'lucide-react';
 import { Category, Photo, Theme } from '../types';
 import { GlassCard } from './GlassCard';
 import EXIF from 'exif-js';
@@ -12,16 +12,17 @@ interface SmartInputProps {
   placeholder?: string;
   theme: Theme;
   type?: string;
+  readOnly?: boolean;
 }
 
-const SmartInput: React.FC<SmartInputProps> = ({ label, value, onChange, storageKey, placeholder, theme, type = 'text' }) => {
+const SmartInput: React.FC<SmartInputProps> = ({ label, value, onChange, storageKey, placeholder, theme, type = 'text', readOnly = false }) => {
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const isDark = theme === 'dark';
 
   useEffect(() => {
-    if (type !== 'text') return; // Don't use history for date inputs
+    if (type !== 'text' || readOnly) return; // Don't use history for date or readOnly
     const saved = localStorage.getItem(`lumina_history_${storageKey}`);
     if (saved) {
       setHistory(JSON.parse(saved));
@@ -33,10 +34,10 @@ const SmartInput: React.FC<SmartInputProps> = ({ label, value, onChange, storage
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [storageKey, type]);
+  }, [storageKey, type, readOnly]);
 
   const saveToHistory = () => {
-    if (type !== 'text' || !value.trim()) return;
+    if (type !== 'text' || !value.trim() || readOnly) return;
     const newHistory = Array.from(new Set([value, ...history])).slice(10);
     setHistory(newHistory);
     localStorage.setItem(`lumina_history_${storageKey}`, JSON.stringify(newHistory));
@@ -66,11 +67,12 @@ const SmartInput: React.FC<SmartInputProps> = ({ label, value, onChange, storage
           value={value} 
           onChange={(e) => onChange(e.target.value)}
           onBlur={saveToHistory}
-          onFocus={() => type === 'text' && setShowHistory(true)}
-          className={`w-full border rounded p-2 text-xs focus:outline-none transition-colors ${inputClass} ${type === 'date' ? 'min-h-[34px]' : ''}`}
+          onFocus={() => type === 'text' && !readOnly && setShowHistory(true)}
+          readOnly={readOnly}
+          className={`w-full border rounded p-2 text-xs focus:outline-none transition-colors ${inputClass} ${type === 'date' ? 'min-h-[34px]' : ''} ${readOnly ? 'cursor-not-allowed opacity-70' : ''}`}
           placeholder={placeholder}
         />
-        {type === 'text' && history.length > 0 && (
+        {type === 'text' && history.length > 0 && !readOnly && (
           <button 
             type="button"
             onClick={() => setShowHistory(!showHistory)}
@@ -81,7 +83,7 @@ const SmartInput: React.FC<SmartInputProps> = ({ label, value, onChange, storage
         )}
       </div>
 
-      {showHistory && history.length > 0 && (
+      {showHistory && history.length > 0 && !readOnly && (
         <div className={`absolute z-50 top-full left-0 right-0 mt-1 border rounded-lg shadow-xl overflow-hidden max-h-40 overflow-y-auto ${dropdownClass}`}>
           {history.map((item) => (
             <div 
@@ -135,6 +137,10 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
   const [latitude, setLatitude] = useState('');
   const [longitude, setLongitude] = useState('');
 
+  // Map Picker State
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstance = useRef<any>(null);
+
   const isDark = theme === 'dark';
   const textPrimary = isDark ? "text-white" : "text-black";
   const textSecondary = isDark ? "text-white/60" : "text-black/60";
@@ -173,6 +179,75 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
     }
   }, [isOpen, editingPhoto]);
 
+  // Initialize Leaflet Map for Picker
+  useEffect(() => {
+    if (!isOpen) {
+      if (mapInstance.current) {
+        mapInstance.current.remove();
+        mapInstance.current = null;
+      }
+      return;
+    }
+
+    const L = (window as any).L;
+    if (!L || !mapRef.current) return;
+
+    // Default center: Tokyo or current lat/lng
+    let center: [number, number] = [35.6895, 139.6917];
+    const latNum = parseFloat(latitude);
+    const lngNum = parseFloat(longitude);
+    if (!isNaN(latNum) && !isNaN(lngNum)) {
+      center = [latNum, lngNum];
+    }
+
+    if (!mapInstance.current) {
+      mapInstance.current = L.map(mapRef.current, {
+        center: center,
+        zoom: 2,
+        zoomControl: false,
+        attributionControl: false,
+      });
+      
+      const map = mapInstance.current;
+      
+      // Tiles
+      const layerStyle = theme === 'dark' ? 'dark_all' : 'light_all';
+      L.tileLayer(`https://{s}.basemaps.cartocdn.com/${layerStyle}/{z}/{x}/{y}{r}.png`, {
+        maxZoom: 20, subdomains: 'abcd',
+      }).addTo(map);
+
+      // Custom Draggable Dot Marker
+      const dotIcon = L.divIcon({
+        className: 'custom-div-icon',
+        html: `<div style="background-color: ${theme === 'dark' ? '#ffffff' : '#000000'}; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 10px rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.5);"></div>`,
+        iconSize: [12, 12],
+        iconAnchor: [6, 6]
+      });
+
+      const marker = L.marker(center, { icon: dotIcon, draggable: true }).addTo(map);
+
+      // Sync Marker -> Inputs
+      marker.on('dragend', function(event: any) {
+        const pos = event.target.getLatLng();
+        setLatitude(pos.lat.toFixed(6));
+        setLongitude(pos.lng.toFixed(6));
+      });
+      
+      // Click map -> Move marker
+      map.on('click', function(e: any) {
+        marker.setLatLng(e.latlng);
+        setLatitude(e.latlng.lat.toFixed(6));
+        setLongitude(e.latlng.lng.toFixed(6));
+      });
+    } else {
+       // Update map if coords change externally (e.g. EXIF loaded)
+       const map = mapInstance.current;
+       // Only flyTo if difference is significant to avoid jitter
+       // Simple re-centering logic handled manually if needed, usually init is enough for picker
+    }
+
+  }, [isOpen, theme, latitude, longitude]); // Re-run if theme changes to update tiles
+
   // Helper: Compress Image to under 2MB
   const compressImage = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -186,7 +261,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
         let width = img.naturalWidth;
         let height = img.naturalHeight;
         
-        // 1. Limit Max Resolution (e.g. 2K QHD) to save size instantly
         const MAX_DIMENSION = 2560;
         let needsResize = false;
 
@@ -202,7 +276,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
           }
         }
 
-        // If file is already small enough and dimensions are reasonable, use original
         if (file.size <= maxSizeInBytes && !needsResize) {
            const reader = new FileReader();
            reader.onload = (e) => resolve(e.target?.result as string);
@@ -211,7 +284,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
            return;
         }
 
-        // 2. Compress via Canvas
         const canvas = document.createElement('canvas');
         canvas.width = width;
         canvas.height = height;
@@ -222,17 +294,13 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
 
         let quality = 0.9;
         let dataUrl = canvas.toDataURL('image/jpeg', quality);
-        
-        // Approx base64 length limit (base64 is ~1.37x larger than binary)
         const maxStringLength = maxSizeInBytes * 1.37;
 
-        // Iteratively reduce quality
         while (dataUrl.length > maxStringLength && quality > 0.3) {
            quality -= 0.1;
            dataUrl = canvas.toDataURL('image/jpeg', quality);
         }
 
-        // Hard fallback if still too big
         if (dataUrl.length > maxStringLength) {
            const scale = 0.8;
            canvas.width = width * scale;
@@ -258,12 +326,10 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
     if (file) {
       setLoading(true);
       
-      // 1. Read EXIF safely from Original File
       try {
         await new Promise<void>((resolve) => {
             EXIF.getData(file as any, function(this: any) {
                 if (!this || !this.exifdata) { resolve(); return; }
-
                 const getTag = (tag: string) => EXIF.getTag(this, tag);
 
                 const make = getTag('Make');
@@ -276,32 +342,22 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
 
                 const isoVal = getTag('ISOSpeedRatings');
                 if (isoVal) setIso(String(isoVal));
-
                 const fNumber = getTag('FNumber');
                 if (fNumber) setAperture(`f/${Number(fNumber).toFixed(1)}`.replace('.0', ''));
-
                 const exposure = getTag('ExposureTime');
                 if (exposure) {
                     if (typeof exposure === 'number') {
                         setShutter(exposure < 1 ? `1/${Math.round(1/exposure)}s` : `${exposure}s`);
-                    } else if (exposure.numerator && exposure.denominator) {
-                         setShutter(`${exposure.numerator}/${exposure.denominator}s`);
-                    }
+                    } else if (exposure.numerator && exposure.denominator) setShutter(`${exposure.numerator}/${exposure.denominator}s`);
                 }
-
                 const focal = getTag('FocalLength');
                 if (focal) {
                      const fVal = typeof focal === 'number' ? focal : focal.numerator / focal.denominator;
                      setFocalLength(`${Math.round(fVal)}mm`);
                 }
-
                 const dateTag = getTag('DateTimeOriginal');
-                if (dateTag) {
-                    const parts = dateTag.split(' ')[0].replace(/:/g, '-');
-                    setDate(parts);
-                }
+                if (dateTag) setDate(dateTag.split(' ')[0].replace(/:/g, '-'));
 
-                // Extract GPS
                 const lat = getTag("GPSLatitude");
                 const latRef = getTag("GPSLatitudeRef");
                 const lon = getTag("GPSLongitude");
@@ -313,11 +369,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
                        if (ref === "S" || ref === "W") dd = dd * -1;
                        return dd;
                    };
-                   
-                   // Ensure dms is array of numbers (exif-js returns Number objects sometimes)
                    const safeLat = [Number(lat[0]), Number(lat[1]), Number(lat[2])];
                    const safeLon = [Number(lon[0]), Number(lon[1]), Number(lon[2])];
-                   
                    const decLat = convertDMSToDD(safeLat, latRef);
                    const decLon = convertDMSToDD(safeLon, lonRef);
                    
@@ -326,7 +379,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
                      setLongitude(String(decLon));
                    }
                 }
-
                 resolve();
             });
         });
@@ -334,10 +386,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
         console.error("EXIF Extraction failed:", err);
       }
 
-      // 2. Compress and Load Image
       try {
          const compressedBase64 = await compressImage(file);
-         
          const img = new Image();
          img.onload = () => {
              setImageDims({ width: img.naturalWidth, height: img.naturalHeight });
@@ -346,9 +396,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
          };
          img.src = compressedBase64;
       } catch (err) {
-         console.error("Compression error:", err);
          setLoading(false);
-         alert("图片处理失败，请重试");
+         alert("图片处理失败");
       }
     }
   };
@@ -357,7 +406,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
     e.preventDefault();
     if (!imageUrl) return;
 
-    // Parse GPS
     const latNum = parseFloat(latitude);
     const lngNum = parseFloat(longitude);
     const hasGPS = !isNaN(latNum) && !isNaN(lngNum);
@@ -376,7 +424,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
         longitude: hasGPS ? lngNum : undefined 
       }
     };
-
     onUpload(photoData);
     onClose();
   };
@@ -384,8 +431,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
   return (
     <div className={`fixed inset-0 z-[200] flex items-center justify-center p-4 animate-fade-in ${isDark ? 'bg-black/80 backdrop-blur-sm' : 'bg-white/60 backdrop-blur-md'}`}>
       <GlassCard className="w-full max-w-2xl h-[85vh] flex flex-col" hoverEffect={false} theme={theme}>
-        
-        {/* Fixed Header */}
         <div className="flex-shrink-0 p-6 pb-2 flex justify-between items-center border-b border-transparent">
             <h2 className={`text-2xl font-serif ${textPrimary}`}>{editingPhoto ? '编辑作品信息' : '上传作品'}</h2>
             <button onClick={onClose} className={`${textSecondary} hover:${textPrimary} transition-colors`}>
@@ -393,7 +438,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
             </button>
         </div>
 
-        {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto p-6 pt-2 custom-scrollbar">
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Image Preview */}
@@ -413,90 +457,83 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
               )}
             </div>
 
-            {/* Basic Info */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className={`block text-xs uppercase tracking-wider mb-1 ${textSecondary}`}>作品标题</label>
                 <input 
-                  type="text" 
-                  value={title} 
-                  onChange={(e) => setTitle(e.target.value)}
+                  type="text" value={title} onChange={(e) => setTitle(e.target.value)}
                   className={`w-full border rounded-lg p-2 focus:outline-none transition-colors ${isDark ? 'bg-white/10 border-white/10 text-white focus:border-white/40' : 'bg-black/5 border-black/10 text-black focus:border-black/40'}`}
-                  placeholder="例如：寂静山岭"
                 />
               </div>
               <div>
                 <label className={`block text-xs uppercase tracking-wider mb-1 ${textSecondary}`}>作品分类</label>
-                <select 
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value as Category)}
+                <select value={category} onChange={(e) => setCategory(e.target.value as Category)}
                   className={`w-full border rounded-lg p-2 focus:outline-none ${isDark ? 'bg-white/10 border-white/10 text-white [&>option]:text-black' : 'bg-black/5 border-black/10 text-black'}`}
                 >
-                  {Object.values(Category)
-                    .filter(c => c !== Category.ALL && c !== Category.HORIZONTAL && c !== Category.VERTICAL)
-                    .map(c => (<option key={c} value={c}>{c}</option>))}
+                  {Object.values(Category).filter(c => c !== Category.ALL && c !== Category.HORIZONTAL && c !== Category.VERTICAL).map(c => (<option key={c} value={c}>{c}</option>))}
                 </select>
               </div>
             </div>
 
-            {/* Rating */}
             <div>
                <label className={`block text-xs uppercase tracking-wider mb-1 ${textSecondary}`}>评级</label>
                <div className="flex gap-2">
                  {[1,2,3,4,5].map(s => (
                    <button type="button" key={s} onClick={() => setRating(s)} className="focus:outline-none hover:scale-110 transition-transform">
-                     <Star 
-                       size={20} 
-                       className={s <= rating ? (isDark ? 'text-white fill-white' : 'text-black fill-black') : (isDark ? 'text-white/20' : 'text-black/20')} 
-                     />
+                     <Star size={20} className={s <= rating ? (isDark ? 'text-white fill-white' : 'text-black fill-black') : (isDark ? 'text-white/20' : 'text-black/20')} />
                    </button>
                  ))}
                </div>
             </div>
 
-            {/* EXIF Section */}
             <div className={`border-t pt-4 ${isDark ? 'border-white/10' : 'border-black/10'}`}>
               <div className="flex justify-between items-end mb-3">
                  <h3 className={`text-sm font-medium ${isDark ? 'text-white/80' : 'text-black/80'}`}>EXIF 参数信息</h3>
-                 <span className={`text-[10px] ${isDark ? 'text-white/40' : 'text-black/40'}`}>
-                   {editingPhoto ? '可直接修改参数' : '上传图片自动提取，或手动输入'}
-                 </span>
+                 <span className={`text-[10px] ${isDark ? 'text-white/40' : 'text-black/40'}`}>上传自动提取，支持手动修改</span>
               </div>
               
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                 <SmartInput label="相机型号" value={camera} onChange={setCamera} storageKey="camera" placeholder="Sony A7R V" theme={theme} />
-                 <SmartInput label="镜头" value={lens} onChange={setLens} storageKey="lens" placeholder="24-70mm" theme={theme} />
-                 <SmartInput label="焦段" value={focalLength} onChange={setFocalLength} storageKey="focal" placeholder="50mm" theme={theme} />
-                 <SmartInput label="光圈" value={aperture} onChange={setAperture} storageKey="aperture" placeholder="f/2.8" theme={theme} />
-                 <SmartInput label="快门" value={shutter} onChange={setShutter} storageKey="shutter" placeholder="1/200s" theme={theme} />
-                 <SmartInput label="ISO" value={iso} onChange={setIso} storageKey="iso" placeholder="100" theme={theme} />
+                 <SmartInput label="相机型号" value={camera} onChange={setCamera} storageKey="camera" theme={theme} />
+                 <SmartInput label="镜头" value={lens} onChange={setLens} storageKey="lens" theme={theme} />
+                 <SmartInput label="焦段" value={focalLength} onChange={setFocalLength} storageKey="focal" theme={theme} />
+                 <SmartInput label="光圈" value={aperture} onChange={setAperture} storageKey="aperture" theme={theme} />
+                 <SmartInput label="快门" value={shutter} onChange={setShutter} storageKey="shutter" theme={theme} />
+                 <SmartInput label="ISO" value={iso} onChange={setIso} storageKey="iso" theme={theme} />
                  <div className="col-span-2">
-                    <SmartInput label="地点" value={location} onChange={setLocation} storageKey="location" placeholder="东京, 日本" theme={theme} />
+                    <SmartInput label="地点" value={location} onChange={setLocation} storageKey="location" theme={theme} />
                  </div>
               </div>
               
-              {/* GPS Coordinates Section */}
-              <div className="grid grid-cols-2 gap-4 mt-4 bg-black/5 p-3 rounded-lg dark:bg-white/5">
-                 <div className="flex items-center gap-2 text-xs opacity-50 mb-2 col-span-2">
-                    <MapPin size={12} />
-                    <span>地理坐标 (用于地图展示)</span>
+              {/* Interactive Map Picker */}
+              <div className={`mt-4 p-3 rounded-lg border ${isDark ? 'bg-white/5 border-white/10' : 'bg-black/5 border-black/10'}`}>
+                 <div className="flex justify-between items-center mb-2">
+                    <div className="flex items-center gap-2 text-xs opacity-60">
+                        <MapPin size={12} />
+                        <span>地理坐标 (拖动黑点修改位置)</span>
+                    </div>
+                    {(latitude && longitude) && (
+                        <div className="flex items-center gap-1 text-xs text-green-500">
+                            <CheckCircle size={12} />
+                            <span>坐标已锁定</span>
+                        </div>
+                    )}
                  </div>
-                 <SmartInput label="纬度 (Lat)" value={latitude} onChange={setLatitude} storageKey="gps_lat" placeholder="35.6895" theme={theme} />
-                 <SmartInput label="经度 (Lng)" value={longitude} onChange={setLongitude} storageKey="gps_lng" placeholder="139.6917" theme={theme} />
+
+                 <div className="grid grid-cols-2 gap-4 mb-2">
+                    <SmartInput label="纬度 (Lat)" value={latitude} onChange={setLatitude} storageKey="gps_lat" placeholder="0.00" theme={theme} />
+                    <SmartInput label="经度 (Lng)" value={longitude} onChange={setLongitude} storageKey="gps_lng" placeholder="0.00" theme={theme} />
+                 </div>
+                 
+                 {/* Map Container */}
+                 <div ref={mapRef} className="w-full h-48 rounded-md overflow-hidden bg-gray-100 relative z-0" />
               </div>
 
               <div className="mt-4">
-                 <SmartInput label="拍摄日期" value={date} onChange={setDate} storageKey="date" placeholder="请选择日期" theme={theme} type="date" />
+                 <SmartInput label="拍摄日期" value={date} onChange={setDate} storageKey="date" theme={theme} type="date" />
               </div>
             </div>
 
-            <button 
-              type="submit" 
-              disabled={!imageUrl || loading}
-              className={`w-full font-semibold py-3 rounded-xl hover:scale-[1.02] transition-transform disabled:opacity-50 shadow-lg mb-4
-                ${isDark ? 'bg-white text-black shadow-white/10' : 'bg-black text-white shadow-black/10'}
-              `}
-            >
+            <button type="submit" disabled={!imageUrl || loading} className={`w-full font-semibold py-3 rounded-xl hover:scale-[1.02] transition-transform disabled:opacity-50 shadow-lg mb-4 ${isDark ? 'bg-white text-black shadow-white/10' : 'bg-black text-white shadow-black/10'}`}>
               {editingPhoto ? '保存修改' : '发布到作品集'}
             </button>
           </form>
