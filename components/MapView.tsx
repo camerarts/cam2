@@ -8,6 +8,7 @@ interface MapViewProps {
   photos: Photo[];
   theme: Theme;
   onPhotoClick: (photo: Photo) => void;
+  onMapLoadStatus?: (isLoading: boolean) => void;
 }
 
 interface LocationGroup {
@@ -18,7 +19,7 @@ interface LocationGroup {
   photos: Photo[];
 }
 
-export const MapView: React.FC<MapViewProps> = ({ photos, theme, onPhotoClick }) => {
+export const MapView: React.FC<MapViewProps> = ({ photos, theme, onPhotoClick, onMapLoadStatus }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
@@ -89,10 +90,20 @@ export const MapView: React.FC<MapViewProps> = ({ photos, theme, onPhotoClick })
       }
     });
     
-    L.tileLayer(`https://{s}.basemaps.cartocdn.com/${layerStyle}/{z}/{x}/{y}{r}.png`, {
+    const tileLayer = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${layerStyle}/{z}/{x}/{y}{r}.png`, {
       maxZoom: 20,
       subdomains: 'abcd',
-    }).addTo(map);
+    });
+
+    // Add loading listeners
+    tileLayer.on('loading', () => {
+       onMapLoadStatus?.(true);
+    });
+    tileLayer.on('load', () => {
+       onMapLoadStatus?.(false);
+    });
+
+    tileLayer.addTo(map);
 
     // 3. Render Markers with Popups
     // Clear old markers
@@ -176,7 +187,7 @@ export const MapView: React.FC<MapViewProps> = ({ photos, theme, onPhotoClick })
       });
     });
 
-  }, [theme, locationGroups, onPhotoClick]); 
+  }, [theme, locationGroups, onPhotoClick, onMapLoadStatus]); 
 
   // Cleanup
   useEffect(() => {
