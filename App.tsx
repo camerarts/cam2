@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Menu, Plus, LogOut, Filter, Settings, Moon, Sun, Trash2, Pencil, Check, SlidersHorizontal, Globe } from 'lucide-react';
 import { GlassCard } from './components/GlassCard';
@@ -302,7 +301,11 @@ const App: React.FC = () => {
       if (exists) {
         return prevPhotos.map(p => p.id === updatedPhoto.id ? updatedPhoto : p);
       } else {
-        return [updatedPhoto, ...prevPhotos]; // Prepend new photo to keep Latest first
+        // New photo: Reset filters to ensure it's visible
+        setActiveCategory(Category.ALL);
+        setActiveTab('最新');
+        window.scrollTo(0, 0);
+        return [updatedPhoto, ...prevPhotos]; // Prepend new photo
       }
     });
     if (selectedPhoto?.id === updatedPhoto.id) {
