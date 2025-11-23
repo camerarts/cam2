@@ -1,8 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Upload, Loader2, ChevronDown, Trash2, Star, Calendar as CalendarIcon, MapPin, CheckCircle } from 'lucide-react';
+import { X, Upload, Loader2, ChevronDown, Trash2, Star, Calendar as CalendarIcon, MapPin, CheckCircle, Cloud } from 'lucide-react';
 import { Category, Photo, Theme } from '../types';
 import { GlassCard } from './GlassCard';
 import EXIF from 'exif-js';
+
+// --- 配置区域 / Configuration Area ---
+// 教程：
+// 1. 如果留空，系统将继续使用 Base64 (LocalStorage) 存储，适合演示。
+// 2. 如果填入 Cloudflare Worker 地址，系统将自动把图片上传到 R2 对象存储，并保存返回的 URL。
+const CLOUD_UPLOAD_URL = "luminaphotos.sqqdeidt.workers.dev"; // 例如: "https://lumina-upload.yourname.workers.dev"
+const CLOUD_UPLOAD_KEY = "lumina_upload_key_123"; // 简单的鉴权密钥，需与 Worker 代码一致
+// ------------------------------------
 
 interface SmartInputProps {
   label: string;
@@ -22,7 +30,7 @@ const SmartInput: React.FC<SmartInputProps> = ({ label, value, onChange, storage
   const isDark = theme === 'dark';
 
   useEffect(() => {
-    if (type !== 'text' || readOnly) return; // Don't use history for date or readOnly
+    if (type !== 'text' || readOnly) return; 
     const saved = localStorage.getItem(`lumina_history_${storageKey}`);
     if (saved) {
       setHistory(JSON.parse(saved));
@@ -117,8 +125,13 @@ interface UploadModalProps {
 
 export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpload, theme, editingPhoto }) => {
   const [loading, setLoading] = useState(false);
-  const [imageUrl, setImageUrl] = useState<string>('');
+  const [uploadStatus, setUploadStatus] = useState<string>(''); // For upload progress feedback
+  
+  // Image Data
+  const [imageUrl, setImageUrl] = useState<string>(''); // This holds Base64 for preview
+  const [finalCloudUrl, setFinalCloudUrl] = useState<string>(''); // This holds the R2 URL if uploaded
   const [imageDims, setImageDims] = useState<{width: number, height: number}>({ width: 0, height: 0 });
+  
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<Category>(Category.LANDSCAPE);
   const [rating, setRating] = useState(5);
@@ -133,7 +146,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
   const [date, setDate] = useState('');
   const [focalLength, setFocalLength] = useState('');
   
-  // GPS State (Strings for input)
+  // GPS State
   const [latitude, setLatitude] = useState('');
   const [longitude, setLongitude] = useState('');
 
@@ -145,10 +158,11 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
   const textPrimary = isDark ? "text-white" : "text-black";
   const textSecondary = isDark ? "text-white/60" : "text-black/60";
 
-  // Init for Edit Mode
+  // Init
   useEffect(() => {
     if (isOpen && editingPhoto) {
       setImageUrl(editingPhoto.url);
+      setFinalCloudUrl(editingPhoto.url); // Existing URL is likely cloud or base64
       setTitle(editingPhoto.title);
       setCategory(editingPhoto.category);
       setRating(editingPhoto.rating || 0);
@@ -165,12 +179,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
       setLatitude(editingPhoto.exif.latitude ? String(editingPhoto.exif.latitude) : '');
       setLongitude(editingPhoto.exif.longitude ? String(editingPhoto.exif.longitude) : '');
     } else if (isOpen && !editingPhoto) {
-      // Reset for new upload
-      setImageUrl(''); setImageDims({width:0,height:0}); setTitle(''); setRating(5);
+      // Reset
+      setImageUrl(''); setFinalCloudUrl(''); setImageDims({width:0,height:0}); setTitle(''); setRating(5);
       setCamera(''); setLens(''); setAperture(''); setShutter(''); setIso(''); setLocation(''); setFocalLength(''); 
       setLatitude(''); setLongitude('');
+      setUploadStatus('');
       
-      // Default date to today
       const today = new Date();
       const yyyy = today.getFullYear();
       const mm = String(today.getMonth() + 1).padStart(2, '0');
@@ -179,103 +193,104 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
     }
   }, [isOpen, editingPhoto]);
 
-  // Initialize Leaflet Map for Picker
+  // Map Initialization (omitted repetitive code, same as previous)
   useEffect(() => {
     if (!isOpen) {
-      if (mapInstance.current) {
-        mapInstance.current.remove();
-        mapInstance.current = null;
-      }
+      if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; }
       return;
     }
-
     const L = (window as any).L;
     if (!L || !mapRef.current) return;
 
-    // Default center: Tokyo or current lat/lng
     let center: [number, number] = [35.6895, 139.6917];
     const latNum = parseFloat(latitude);
     const lngNum = parseFloat(longitude);
-    if (!isNaN(latNum) && !isNaN(lngNum)) {
-      center = [latNum, lngNum];
-    }
+    if (!isNaN(latNum) && !isNaN(lngNum)) center = [latNum, lngNum];
 
     if (!mapInstance.current) {
-      mapInstance.current = L.map(mapRef.current, {
-        center: center,
-        zoom: 2,
-        zoomControl: false,
-        attributionControl: false,
-      });
-      
+      mapInstance.current = L.map(mapRef.current, { center: center, zoom: 2, zoomControl: false, attributionControl: false });
       const map = mapInstance.current;
-      
-      // Tiles
       const layerStyle = theme === 'dark' ? 'dark_all' : 'light_all';
-      L.tileLayer(`https://{s}.basemaps.cartocdn.com/${layerStyle}/{z}/{x}/{y}{r}.png`, {
-        maxZoom: 20, subdomains: 'abcd',
-      }).addTo(map);
-
-      // Custom Draggable Dot Marker
+      L.tileLayer(`https://{s}.basemaps.cartocdn.com/${layerStyle}/{z}/{x}/{y}{r}.png`, { maxZoom: 20, subdomains: 'abcd' }).addTo(map);
+      
       const dotIcon = L.divIcon({
         className: 'custom-div-icon',
         html: `<div style="background-color: ${theme === 'dark' ? '#ffffff' : '#000000'}; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 10px rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.5);"></div>`,
-        iconSize: [12, 12],
-        iconAnchor: [6, 6]
+        iconSize: [12, 12], iconAnchor: [6, 6]
       });
-
       const marker = L.marker(center, { icon: dotIcon, draggable: true }).addTo(map);
-
-      // Sync Marker -> Inputs
       marker.on('dragend', function(event: any) {
         const pos = event.target.getLatLng();
-        setLatitude(pos.lat.toFixed(6));
-        setLongitude(pos.lng.toFixed(6));
+        setLatitude(pos.lat.toFixed(6)); setLongitude(pos.lng.toFixed(6));
       });
-      
-      // Click map -> Move marker
       map.on('click', function(e: any) {
         marker.setLatLng(e.latlng);
-        setLatitude(e.latlng.lat.toFixed(6));
-        setLongitude(e.latlng.lng.toFixed(6));
+        setLatitude(e.latlng.lat.toFixed(6)); setLongitude(e.latlng.lng.toFixed(6));
       });
-    } else {
-       // Update map if coords change externally (e.g. EXIF loaded)
-       const map = mapInstance.current;
-       // Only flyTo if difference is significant to avoid jitter
-       // Simple re-centering logic handled manually if needed, usually init is enough for picker
     }
+  }, [isOpen, theme, latitude, longitude]);
 
-  }, [isOpen, theme, latitude, longitude]); // Re-run if theme changes to update tiles
+  // Helper: Base64 to Blob
+  const base64ToBlob = (base64: string): Blob => {
+    const arr = base64.split(',');
+    const mime = arr[0].match(/:(.*?);/)![1];
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new Blob([u8arr], { type: mime });
+  };
 
-  // Helper: Compress Image to under 2MB
+  // Helper: Upload to R2 Worker
+  const uploadToCloud = async (base64Data: string): Promise<string> => {
+     if (!CLOUD_UPLOAD_URL) return base64Data; // Fallback to base64 if no server configured
+
+     try {
+       setUploadStatus('正在上传到云端...');
+       const blob = base64ToBlob(base64Data);
+       
+       const response = await fetch(CLOUD_UPLOAD_URL, {
+         method: 'PUT',
+         headers: {
+           'X-Secret-Key': CLOUD_UPLOAD_KEY,
+           'Content-Type': blob.type
+         },
+         body: blob
+       });
+
+       if (!response.ok) throw new Error('Upload failed');
+       
+       const data = await response.json();
+       setUploadStatus('云端上传成功!');
+       return data.url; // The public R2 URL
+     } catch (err) {
+       console.error("Cloud upload failed", err);
+       setUploadStatus('上传失败，使用本地存储');
+       return base64Data; // Fallback
+     }
+  };
+
+  // Helper: Compress Image
   const compressImage = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const maxSizeInBytes = 2 * 1024 * 1024; // 2MB
       const objectUrl = URL.createObjectURL(file);
       const img = new Image();
       img.src = objectUrl;
-
       img.onload = () => {
         URL.revokeObjectURL(objectUrl);
         let width = img.naturalWidth;
         let height = img.naturalHeight;
-        
         const MAX_DIMENSION = 2560;
         let needsResize = false;
-
         if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
           needsResize = true;
           const ratio = width / height;
-          if (width > height) {
-            width = MAX_DIMENSION;
-            height = width / ratio;
-          } else {
-            height = MAX_DIMENSION;
-            width = height * ratio;
-          }
+          if (width > height) { width = MAX_DIMENSION; height = width / ratio; } 
+          else { height = MAX_DIMENSION; width = height * ratio; }
         }
-
         if (file.size <= maxSizeInBytes && !needsResize) {
            const reader = new FileReader();
            reader.onload = (e) => resolve(e.target?.result as string);
@@ -283,55 +298,38 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
            reader.readAsDataURL(file);
            return;
         }
-
         const canvas = document.createElement('canvas');
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         if (!ctx) { reject(new Error('Canvas context unavailable')); return; }
-
         ctx.drawImage(img, 0, 0, width, height);
-
         let quality = 0.9;
         let dataUrl = canvas.toDataURL('image/jpeg', quality);
         const maxStringLength = maxSizeInBytes * 1.37;
-
         while (dataUrl.length > maxStringLength && quality > 0.3) {
            quality -= 0.1;
            dataUrl = canvas.toDataURL('image/jpeg', quality);
         }
-
-        if (dataUrl.length > maxStringLength) {
-           const scale = 0.8;
-           canvas.width = width * scale;
-           canvas.height = height * scale;
-           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-           dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-        }
-
         resolve(dataUrl);
       };
-      
-      img.onerror = (e) => {
-        URL.revokeObjectURL(objectUrl);
-        reject(e);
-      }
+      img.onerror = (e) => { URL.revokeObjectURL(objectUrl); reject(e); }
     });
   };
-
-  if (!isOpen) return null;
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setLoading(true);
+      setUploadStatus('处理图片中...');
       
+      // EXIF Logic (Keep existing)
       try {
         await new Promise<void>((resolve) => {
             EXIF.getData(file as any, function(this: any) {
                 if (!this || !this.exifdata) { resolve(); return; }
                 const getTag = (tag: string) => EXIF.getTag(this, tag);
-
+                // ... (Existing EXIF extraction code) ...
                 const make = getTag('Make');
                 const model = getTag('Model');
                 if (model) {
@@ -339,60 +337,36 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
                     const cleanModel = model.replace(/\0/g, '').trim();
                     setCamera(cleanModel.startsWith(cleanMake) ? cleanModel : `${cleanMake} ${cleanModel}`.trim());
                 }
-
-                const isoVal = getTag('ISOSpeedRatings');
-                if (isoVal) setIso(String(isoVal));
-                const fNumber = getTag('FNumber');
-                if (fNumber) setAperture(`f/${Number(fNumber).toFixed(1)}`.replace('.0', ''));
-                const exposure = getTag('ExposureTime');
-                if (exposure) {
-                    if (typeof exposure === 'number') {
-                        setShutter(exposure < 1 ? `1/${Math.round(1/exposure)}s` : `${exposure}s`);
-                    } else if (exposure.numerator && exposure.denominator) setShutter(`${exposure.numerator}/${exposure.denominator}s`);
-                }
-                const focal = getTag('FocalLength');
-                if (focal) {
-                     const fVal = typeof focal === 'number' ? focal : focal.numerator / focal.denominator;
-                     setFocalLength(`${Math.round(fVal)}mm`);
-                }
-                const dateTag = getTag('DateTimeOriginal');
-                if (dateTag) setDate(dateTag.split(' ')[0].replace(/:/g, '-'));
-
-                const lat = getTag("GPSLatitude");
-                const latRef = getTag("GPSLatitudeRef");
-                const lon = getTag("GPSLongitude");
-                const lonRef = getTag("GPSLongitudeRef");
-
+                const isoVal = getTag('ISOSpeedRatings'); if (isoVal) setIso(String(isoVal));
+                const fNumber = getTag('FNumber'); if (fNumber) setAperture(`f/${Number(fNumber).toFixed(1)}`.replace('.0', ''));
+                const exposure = getTag('ExposureTime'); if (exposure) setShutter(typeof exposure === 'number' ? (exposure < 1 ? `1/${Math.round(1/exposure)}s` : `${exposure}s`) : `${exposure.numerator}/${exposure.denominator}s`);
+                const focal = getTag('FocalLength'); if (focal) setFocalLength(`${Math.round(typeof focal === 'number' ? focal : focal.numerator / focal.denominator)}mm`);
+                const dateTag = getTag('DateTimeOriginal'); if (dateTag) setDate(dateTag.split(' ')[0].replace(/:/g, '-'));
+                
+                // GPS
+                const lat = getTag("GPSLatitude"); const latRef = getTag("GPSLatitudeRef");
+                const lon = getTag("GPSLongitude"); const lonRef = getTag("GPSLongitudeRef");
                 if (lat && lon && latRef && lonRef) {
-                   const convertDMSToDD = (dms: number[], ref: string) => {
-                       let dd = dms[0] + dms[1] / 60 + dms[2] / 3600;
-                       if (ref === "S" || ref === "W") dd = dd * -1;
-                       return dd;
-                   };
                    const safeLat = [Number(lat[0]), Number(lat[1]), Number(lat[2])];
                    const safeLon = [Number(lon[0]), Number(lon[1]), Number(lon[2])];
-                   const decLat = convertDMSToDD(safeLat, latRef);
-                   const decLon = convertDMSToDD(safeLon, lonRef);
-                   
-                   if (!isNaN(decLat) && !isNaN(decLon)) {
-                     setLatitude(String(decLat));
-                     setLongitude(String(decLon));
-                   }
+                   let ddLat = safeLat[0] + safeLat[1]/60 + safeLat[2]/3600; if(latRef === "S") ddLat *= -1;
+                   let ddLon = safeLon[0] + safeLon[1]/60 + safeLon[2]/3600; if(lonRef === "W") ddLon *= -1;
+                   if (!isNaN(ddLat) && !isNaN(ddLon)) { setLatitude(String(ddLat)); setLongitude(String(ddLon)); }
                 }
                 resolve();
             });
         });
-      } catch (err) {
-        console.error("EXIF Extraction failed:", err);
-      }
+      } catch (err) { console.error("EXIF failed", err); }
 
       try {
          const compressedBase64 = await compressImage(file);
+         
          const img = new Image();
          img.onload = () => {
              setImageDims({ width: img.naturalWidth, height: img.naturalHeight });
-             setImageUrl(compressedBase64);
+             setImageUrl(compressedBase64); // Show preview immediately
              setLoading(false);
+             setUploadStatus('');
          };
          img.src = compressedBase64;
       } catch (err) {
@@ -402,9 +376,21 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!imageUrl) return;
+
+    setLoading(true);
+
+    // If we have a Cloud URL configured, upload now
+    let finalUrl = imageUrl;
+    if (CLOUD_UPLOAD_URL && !editingPhoto) {
+        // Only upload if it's new. If editing, we assume URL is already valid unless changed?
+        // Simpler logic: if imageUrl starts with data:image, it needs upload
+        if (imageUrl.startsWith('data:image')) {
+            finalUrl = await uploadToCloud(imageUrl);
+        }
+    }
 
     const latNum = parseFloat(latitude);
     const lngNum = parseFloat(longitude);
@@ -412,7 +398,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
 
     const photoData: Photo = {
       id: editingPhoto ? editingPhoto.id : Date.now().toString(),
-      url: imageUrl,
+      url: finalUrl,
       title: title || '未命名作品',
       category: category,
       width: imageDims.width,
@@ -425,8 +411,11 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
       }
     };
     onUpload(photoData);
+    setLoading(false);
     onClose();
   };
+
+  if (!isOpen) return null;
 
   return (
     <div className={`fixed inset-0 z-[200] flex items-center justify-center p-4 animate-fade-in ${isDark ? 'bg-black/80 backdrop-blur-sm' : 'bg-white/60 backdrop-blur-md'}`}>
@@ -440,7 +429,6 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
 
         <div className="flex-1 overflow-y-auto p-6 pt-2 custom-scrollbar">
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Image Preview */}
             <div className={`w-full aspect-video rounded-xl border-2 border-dashed flex flex-col items-center justify-center relative overflow-hidden group transition-colors flex-shrink-0
                ${isDark ? 'border-white/20 bg-white/5 hover:border-white/40' : 'border-black/20 bg-black/5 hover:border-black/40'}
             `}>
@@ -452,29 +440,32 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
                   <span className="text-sm">点击选择或拖拽图片</span>
                 </div>
               )}
+              {uploadStatus && (
+                  <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/70 text-white text-xs px-2 py-1 rounded-full backdrop-blur-md flex items-center gap-1">
+                      {uploadStatus === '云端上传成功!' ? <Cloud size={10} className="text-green-400"/> : <Loader2 size={10} className="animate-spin"/>}
+                      {uploadStatus}
+                  </div>
+              )}
               {!editingPhoto && (
                  <input type="file" accept="image/jpeg,image/tiff,image/png" onChange={handleFileChange} className="absolute inset-0 opacity-0 cursor-pointer" />
               )}
             </div>
 
+            {/* Basic Info */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className={`block text-xs uppercase tracking-wider mb-1 ${textSecondary}`}>作品标题</label>
-                <input 
-                  type="text" value={title} onChange={(e) => setTitle(e.target.value)}
-                  className={`w-full border rounded-lg p-2 focus:outline-none transition-colors ${isDark ? 'bg-white/10 border-white/10 text-white focus:border-white/40' : 'bg-black/5 border-black/10 text-black focus:border-black/40'}`}
-                />
+                <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} className={`w-full border rounded-lg p-2 focus:outline-none transition-colors ${isDark ? 'bg-white/10 border-white/10 text-white focus:border-white/40' : 'bg-black/5 border-black/10 text-black focus:border-black/40'}`} />
               </div>
               <div>
                 <label className={`block text-xs uppercase tracking-wider mb-1 ${textSecondary}`}>作品分类</label>
-                <select value={category} onChange={(e) => setCategory(e.target.value as Category)}
-                  className={`w-full border rounded-lg p-2 focus:outline-none ${isDark ? 'bg-white/10 border-white/10 text-white [&>option]:text-black' : 'bg-black/5 border-black/10 text-black'}`}
-                >
+                <select value={category} onChange={(e) => setCategory(e.target.value as Category)} className={`w-full border rounded-lg p-2 focus:outline-none ${isDark ? 'bg-white/10 border-white/10 text-white [&>option]:text-black' : 'bg-black/5 border-black/10 text-black'}`}>
                   {Object.values(Category).filter(c => c !== Category.ALL && c !== Category.HORIZONTAL && c !== Category.VERTICAL).map(c => (<option key={c} value={c}>{c}</option>))}
                 </select>
               </div>
             </div>
 
+            {/* Rating */}
             <div>
                <label className={`block text-xs uppercase tracking-wider mb-1 ${textSecondary}`}>评级</label>
                <div className="flex gap-2">
@@ -486,12 +477,12 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
                </div>
             </div>
 
+            {/* EXIF */}
             <div className={`border-t pt-4 ${isDark ? 'border-white/10' : 'border-black/10'}`}>
               <div className="flex justify-between items-end mb-3">
                  <h3 className={`text-sm font-medium ${isDark ? 'text-white/80' : 'text-black/80'}`}>EXIF 参数信息</h3>
-                 <span className={`text-[10px] ${isDark ? 'text-white/40' : 'text-black/40'}`}>上传自动提取，支持手动修改</span>
+                 <span className={`text-[10px] ${isDark ? 'text-white/40' : 'text-black/40'}`}>支持自动提取或手动修改</span>
               </div>
-              
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                  <SmartInput label="相机型号" value={camera} onChange={setCamera} storageKey="camera" theme={theme} />
                  <SmartInput label="镜头" value={lens} onChange={setLens} storageKey="lens" theme={theme} />
@@ -503,28 +494,20 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
                     <SmartInput label="地点" value={location} onChange={setLocation} storageKey="location" theme={theme} />
                  </div>
               </div>
-              
-              {/* Interactive Map Picker */}
+
+              {/* GPS */}
               <div className={`mt-4 p-3 rounded-lg border ${isDark ? 'bg-white/5 border-white/10' : 'bg-black/5 border-black/10'}`}>
                  <div className="flex justify-between items-center mb-2">
                     <div className="flex items-center gap-2 text-xs opacity-60">
                         <MapPin size={12} />
                         <span>地理坐标 (拖动黑点修改位置)</span>
                     </div>
-                    {(latitude && longitude) && (
-                        <div className="flex items-center gap-1 text-xs text-green-500">
-                            <CheckCircle size={12} />
-                            <span>坐标已锁定</span>
-                        </div>
-                    )}
+                    {(latitude && longitude) && <div className="flex items-center gap-1 text-xs text-green-500"><CheckCircle size={12} /><span>坐标已锁定</span></div>}
                  </div>
-
                  <div className="grid grid-cols-2 gap-4 mb-2">
-                    <SmartInput label="纬度 (Lat)" value={latitude} onChange={setLatitude} storageKey="gps_lat" placeholder="0.00" theme={theme} />
-                    <SmartInput label="经度 (Lng)" value={longitude} onChange={setLongitude} storageKey="gps_lng" placeholder="0.00" theme={theme} />
+                    <SmartInput label="纬度" value={latitude} onChange={setLatitude} storageKey="gps_lat" placeholder="0.00" theme={theme} />
+                    <SmartInput label="经度" value={longitude} onChange={setLongitude} storageKey="gps_lng" placeholder="0.00" theme={theme} />
                  </div>
-                 
-                 {/* Map Container */}
                  <div ref={mapRef} className="w-full h-48 rounded-md overflow-hidden bg-gray-100 relative z-0" />
               </div>
 
@@ -534,7 +517,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
             </div>
 
             <button type="submit" disabled={!imageUrl || loading} className={`w-full font-semibold py-3 rounded-xl hover:scale-[1.02] transition-transform disabled:opacity-50 shadow-lg mb-4 ${isDark ? 'bg-white text-black shadow-white/10' : 'bg-black text-white shadow-black/10'}`}>
-              {editingPhoto ? '保存修改' : '发布到作品集'}
+              {loading ? (uploadStatus ? uploadStatus : '处理中...') : (editingPhoto ? '保存修改' : '发布到作品集')}
             </button>
           </form>
         </div>
