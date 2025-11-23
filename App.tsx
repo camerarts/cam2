@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Menu, Plus, LogOut, Filter, Settings, Moon, Sun, Trash2, Pencil, Check, SlidersHorizontal, Globe } from 'lucide-react';
 import { GlassCard } from './components/GlassCard';
@@ -142,7 +143,7 @@ const App: React.FC = () => {
     } catch (e: any) {
       // Catch QuotaExceededError
       if (e.name === 'QuotaExceededError' || e.code === 22) {
-        alert("本地存储空间已满，新照片可能无法保存。建议联系管理员开启云存储。");
+        alert("本地存储空间已满，新照片可能无法保存。请确保已连接云存储（R2）。");
         console.error("LocalStorage Quota Exceeded. Failed to save photos.");
       } else {
         console.error("Failed to save photos to storage", e);
