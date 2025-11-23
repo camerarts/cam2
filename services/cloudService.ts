@@ -2,9 +2,8 @@
 // ==========================================
 // 配置区域 / Configuration
 // ==========================================
-// 1. 请填入您的 Cloudflare Worker 地址 (例如 "https://lumina-upload.yourname.workers.dev")
-//    注意：请确保 Worker 代码已更新以支持 auth-setup 接口
-export const CLOUD_API_URL: string = "luminaphotos.10125800.xyz"; 
+// 1. Cloudflare Worker 地址 (已填入您提供的地址)
+export const CLOUD_API_URL: string = "https://luminaphotos.10125800.xyz"; 
 
 // 2. 密钥 (需与 Worker 代码一致)
 export const CLOUD_API_KEY = "lumina_upload_key_123"; 
@@ -17,57 +16,26 @@ const getApiUrl = () => CLOUD_API_URL.replace(/\/$/, "");
 
 /**
  * Check if the admin password has already been set in the cloud
+ * (Deprecated for hardcoded login, kept for compatibility)
  */
 export const checkAuthSetup = async (): Promise<boolean> => {
-  if (!isCloudConfigured()) return false;
-  try {
-    const res = await fetch(`${getApiUrl()}?action=auth-check`);
-    const data = await res.json();
-    return data.isSetup;
-  } catch (e) {
-    console.error("Cloud Auth Check Failed", e);
-    return false;
-  }
+  return true; 
 };
 
 /**
- * Set the admin password in the cloud (First time setup)
+ * Set the admin password in the cloud
+ * (Deprecated for hardcoded login)
  */
 export const setupPassword = async (password: string): Promise<boolean> => {
-  if (!isCloudConfigured()) return false;
-  try {
-    const res = await fetch(`${getApiUrl()}?action=auth-setup`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password })
-    });
-    if (!res.ok) throw new Error(`Server Error: ${res.status}`);
-    const data = await res.json();
-    return data.success;
-  } catch (e) {
-    console.error("Cloud Auth Setup Failed", e);
-    return false;
-  }
+  return true;
 };
 
 /**
  * Verify login password against the cloud
+ * (Deprecated for hardcoded login)
  */
 export const verifyPassword = async (password: string): Promise<boolean> => {
-  if (!isCloudConfigured()) return false;
-  try {
-    const res = await fetch(`${getApiUrl()}?action=auth-verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password })
-    });
-    if (!res.ok) throw new Error(`Server Error: ${res.status}`);
-    const data = await res.json();
-    return data.success;
-  } catch (e) {
-    console.error("Cloud Auth Verify Failed", e);
-    return false;
-  }
+  return true;
 };
 
 /**
