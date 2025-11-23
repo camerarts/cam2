@@ -126,19 +126,27 @@ const App: React.FC = () => {
   const [photos, setPhotos] = useState<Photo[]>(() => {
     try {
       const saved = localStorage.getItem('lumina_photos');
-      return saved ? JSON.parse(saved) : INITIAL_PHOTOS;
+      // Simple validation to ensure it's an array
+      const parsed = saved ? JSON.parse(saved) : null;
+      return Array.isArray(parsed) ? parsed : INITIAL_PHOTOS;
     } catch (e) {
       console.error("Failed to load photos from storage", e);
       return INITIAL_PHOTOS;
     }
   });
 
-  // Save to local storage whenever photos change
+  // Save to local storage whenever photos change - WITH SAFETY CHECK
   useEffect(() => {
     try {
       localStorage.setItem('lumina_photos', JSON.stringify(photos));
-    } catch (e) {
-      console.error("Failed to save photos to storage", e);
+    } catch (e: any) {
+      // Catch QuotaExceededError
+      if (e.name === 'QuotaExceededError' || e.code === 22) {
+        alert("本地存储空间已满，新照片可能无法保存。建议联系管理员开启云存储。");
+        console.error("LocalStorage Quota Exceeded. Failed to save photos.");
+      } else {
+        console.error("Failed to save photos to storage", e);
+      }
     }
   }, [photos]);
 
