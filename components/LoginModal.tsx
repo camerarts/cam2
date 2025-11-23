@@ -1,7 +1,9 @@
+
 import React, { useState, useEffect } from 'react';
-import { X, Lock, ArrowRight, ShieldCheck, KeyRound } from 'lucide-react';
+import { X, Lock, ArrowRight, ShieldCheck, KeyRound, Cloud, CloudOff, Loader2 } from 'lucide-react';
 import { GlassCard } from './GlassCard';
 import { Theme } from '../types';
+import { checkAuthSetup, setupPassword, verifyPassword, isCloudConfigured } from '../services/cloudService';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -14,46 +16,83 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isSetupMode, setIsSetupMode] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [shake, setShake] = useState(false);
-
+  
+  const isCloud = isCloudConfigured();
   const isDark = theme === 'dark';
 
   useEffect(() => {
     if (isOpen) {
-      const stored = localStorage.getItem('lumina_admin_pwd');
-      setIsSetupMode(!stored);
+      checkStatus();
       setPassword('');
       setConfirmPassword('');
       setError('');
     }
   }, [isOpen]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const checkStatus = async () => {
+    setIsLoading(true);
+    if (isCloud) {
+      // Check cloud status
+      const setup = await checkAuthSetup();
+      setIsSetupMode(!setup);
+    } else {
+      // Fallback to local storage
+      const stored = localStorage.getItem('lumina_admin_pwd');
+      setIsSetupMode(!stored);
+    }
+    setIsLoading(false);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setIsLoading(true);
 
-    if (isSetupMode) {
-      if (password.length < 4) {
-        setError('密码太短');
-        triggerShake(); return;
-      }
-      if (password !== confirmPassword) {
-        setError('两次输入的密码不一致');
-        triggerShake(); return;
-      }
-      localStorage.setItem('lumina_admin_pwd', password);
-      onLoginSuccess();
-      onClose();
-    } else {
-      const stored = localStorage.getItem('lumina_admin_pwd');
-      if (password === stored) {
+    try {
+      if (isSetupMode) {
+        // SETUP FLOW
+        if (password.length < 4) {
+          throw new Error('密码太短');
+        }
+        if (password !== confirmPassword) {
+          throw new Error('两次输入的密码不一致');
+        }
+
+        if (isCloud) {
+           const success = await setupPassword(password);
+           if (!success) throw new Error('云端设置失败，请检查网络');
+        } else {
+           localStorage.setItem('lumina_admin_pwd', password);
+        }
+        
         onLoginSuccess();
         onClose();
+
       } else {
-        setError('密码错误');
-        triggerShake();
+        // LOGIN FLOW
+        let isValid = false;
+        if (isCloud) {
+           isValid = await verifyPassword(password);
+        } else {
+           const stored = localStorage.getItem('lumina_admin_pwd');
+           isValid = password === stored;
+        }
+
+        if (isValid) {
+          onLoginSuccess();
+          onClose();
+        } else {
+          throw new Error('密码错误');
+        }
       }
+    } catch (err: any) {
+      setError(err.message || '操作失败');
+      triggerShake();
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -82,9 +121,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
           <h2 className={`text-2xl font-serif ${textPrimary}`}>
             {isSetupMode ? '首次设置' : '管理员登录'}
           </h2>
-          <p className={`${textSecondary} text-sm mt-2 text-center`}>
-            {isSetupMode ? '请设置一个安全密码' : '请输入密码继续访问'}
-          </p>
+          <div className="flex items-center gap-1 mt-2">
+            {isCloud ? <Cloud size={12} className="text-blue-400" /> : <CloudOff size={12} className="text-gray-400" />}
+            <p className={`${textSecondary} text-xs`}>
+              {isCloud ? '云端同步已启用 (密码永久保存)' : '本地模式 (仅限当前设备)'}
+            </p>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -95,7 +137,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
               placeholder={isSetupMode ? "设置新密码" : "输入密码"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className={`w-full rounded-xl py-3 pl-10 pr-4 focus:outline-none transition-all ${inputBg}`}
+              disabled={isLoading}
+              className={`w-full rounded-xl py-3 pl-10 pr-4 focus:outline-none transition-all ${inputBg} disabled:opacity-50`}
             />
           </div>
 
@@ -106,7 +149,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
                 type="password" placeholder="确认新密码"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className={`w-full rounded-xl py-3 pl-10 pr-4 focus:outline-none transition-all ${inputBg}`}
+                disabled={isLoading}
+                className={`w-full rounded-xl py-3 pl-10 pr-4 focus:outline-none transition-all ${inputBg} disabled:opacity-50`}
               />
             </div>
           )}
@@ -115,11 +159,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onLogin
 
           <button 
             type="submit"
-            className={`w-full font-semibold py-3 rounded-xl hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 mt-2
+            disabled={isLoading}
+            className={`w-full font-semibold py-3 rounded-xl hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 mt-2 disabled:opacity-70 disabled:cursor-not-allowed
               ${isDark ? 'bg-white text-black' : 'bg-black text-white'}
             `}
           >
-            {isSetupMode ? '设置并登录' : '登录'} <ArrowRight size={16} />
+            {isLoading && <Loader2 size={16} className="animate-spin" />}
+            {isSetupMode ? '设置并登录' : '登录'} 
+            {!isLoading && <ArrowRight size={16} />}
           </button>
         </form>
       </GlassCard>
